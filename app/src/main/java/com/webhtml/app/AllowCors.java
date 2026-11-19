@@ -2,7 +2,6 @@ package com.webhtml.app;
 
 import android.app.Activity;
 import android.content.Context;
-import android.util.Base64;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -34,13 +33,6 @@ public class AllowCors {
             "  window.__allowCorsInstalled = true;" +
             "  const nativeFetch = window.fetch.bind(window);" +
             "  window.__corsFetchCbs = window.__corsFetchCbs || {};" +
-            "  function decodeBase64ToBytes(b64) {" +
-            "    const bin = atob(b64);" +
-            "    const len = bin.length;" +
-            "    const bytes = new Uint8Array(len);" +
-            "    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);" +
-            "    return bytes;" +
-            "  }" +
             "  window.fetch = function (input, init = {}) {" +
             "    const url = typeof input === 'string' ? input : (input && input.url) || '';" +
             "    const hasUaValue = /(?:^|#)ua=[^&#]+/.test(url);" +
@@ -57,14 +49,12 @@ public class AllowCors {
             "    }" +
             "    return new Promise((resolve, reject) => {" +
             "      const id = 'cors_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);" +
-            "      window.__corsFetchCbs[id] = (status, bodyPayload, contentType, isBase64, suggestedFilename) => {" +
+            "      window.__corsFetchCbs[id] = (status, bodyPayload, contentType, suggestedFilename) => {" +
             "        delete window.__corsFetchCbs[id];" +
-            "        const mime = contentType || 'application/octet-stream';" +
+            "        const mime = contentType || 'text/plain; charset=UTF-8';" +
             "        const headers = { 'Content-Type': mime };" +
-            "        if (isBase64) headers['X-Allow-Cors-Base64'] = '1';" +
             "        if (suggestedFilename) headers['X-Suggested-Filename'] = suggestedFilename;" +
-            "        const responseBody = isBase64 ? decodeBase64ToBytes(bodyPayload) : bodyPayload;" +
-            "        resolve(new Response(responseBody, {" +
+            "        resolve(new Response(bodyPayload, {" +
             "          status: status," +
             "          statusText: status >= 200 && status < 300 ? 'OK' : 'Error'," +
             "          headers: headers" +
@@ -119,18 +109,6 @@ public class AllowCors {
         }
     }
 
-    private static boolean isTextualMime(String mimeLower, String cleanUrlLower) {
-        if (mimeLower.startsWith("text/")) return true;
-        if (mimeLower.contains("json") || mimeLower.contains("xml") || mimeLower.contains("javascript") || mimeLower.contains("ecmascript")) {
-            return true;
-        }
-        if (mimeLower.contains("image/svg")) return true;
-        if (mimeLower.startsWith("image/") || mimeLower.startsWith("audio/") || mimeLower.startsWith("video/") || mimeLower.contains("octet-stream")) {
-            return false;
-        }
-        return cleanUrlLower.endsWith(".json") || cleanUrlLower.endsWith(".txt") || cleanUrlLower.endsWith(".html") || cleanUrlLower.endsWith(".xml") || cleanUrlLower.endsWith(".svg");
-    }
-
     private static String extractFilenameFromContentDisposition(String disposition) {
         if (disposition == null || disposition.trim().isEmpty()) return "";
         try {
@@ -159,7 +137,6 @@ public class AllowCors {
             int statusCode = 500;
             String body = "";
             String responseContentType = null;
-            boolean isBase64 = false;
             String suggestedFilename = "";
 
             try {
@@ -200,7 +177,7 @@ public class AllowCors {
                     connection.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
                     connection.setRequestProperty("Upgrade-Insecure-Requests", "1");
                 } else {
-                    connection.setRequestProperty("Accept", "application/json, application/ld+json, text/plain, image/*, */*");
+                    connection.setRequestProperty("Accept", "application/json, application/ld+json, text/plain, */*");
                 }
 
                 connection.setInstanceFollowRedirects(true);
@@ -210,7 +187,7 @@ public class AllowCors {
                 statusCode = connection.getResponseCode();
                 responseContentType = connection.getContentType();
                 if (responseContentType == null) {
-                    responseContentType = isHtmlMode ? "text/html; charset=UTF-8" : "application/octet-stream";
+                    responseContentType = isHtmlMode ? "text/html; charset=UTF-8" : "text/plain; charset=UTF-8";
                 }
 
                 String disposition = connection.getHeaderField("Content-Disposition");
@@ -229,42 +206,31 @@ public class AllowCors {
                     }
 
                     byte[] rawBytes = out.toByteArray();
-                    String mimeOnly = responseContentType.split(";")[0].trim().toLowerCase(Locale.ROOT);
-                    String cleanUrlLower = cleanUrlStr.toLowerCase(Locale.ROOT);
-
-                    if (isTextualMime(mimeOnly, cleanUrlLower)) {
-                        String encoding = "UTF-8";
-                        if (responseContentType.contains("charset=")) {
-                            try {
-                                encoding = responseContentType.split("charset=")[1].split(";")[0].trim();
-                            } catch (Exception ignored) {}
-                        }
-                        body = new String(rawBytes, encoding);
-                        isBase64 = false;
-                    } else {
-                        body = Base64.encodeToString(rawBytes, Base64.NO_WRAP);
-                        isBase64 = true;
+                    String encoding = "UTF-8";
+                    if (responseContentType.contains("charset=")) {
+                        try {
+                            encoding = responseContentType.split("charset=")[1].split(";")[0].trim();
+                        } catch (Exception ignored) {}
                     }
+                    body = new String(rawBytes, encoding);
                 }
             } catch (Exception e) {
                 statusCode = 500;
-                body = e.getMessage() != null ? e.getMessage() : "AllowCORS fetch error";
+                body = e.getMessage() != null ? e.getMessage() : "AllowCors fetch error";
                 responseContentType = "text/plain; charset=utf-8";
-                isBase64 = false;
                 suggestedFilename = "";
             }
 
             final int finalStatus = statusCode;
             final String finalBody = body;
             final String finalContentType = responseContentType;
-            final boolean finalIsBase64 = isBase64;
             final String finalFilename = suggestedFilename;
 
             if (context instanceof Activity && webView != null) {
                 ((Activity) context).runOnUiThread(() -> {
                     String js = "window.__corsFetchCbs && window.__corsFetchCbs[" + JSONObject.quote(callbackId) + "] && "
                             + "window.__corsFetchCbs[" + JSONObject.quote(callbackId) + "]("
-                            + finalStatus + ", " + JSONObject.quote(finalBody) + ", " + JSONObject.quote(finalContentType) + ", " + finalIsBase64 + ", " + JSONObject.quote(finalFilename) + ");";
+                            + finalStatus + ", " + JSONObject.quote(finalBody) + ", " + JSONObject.quote(finalContentType) + ", " + JSONObject.quote(finalFilename) + ");";
                     webView.evaluateJavascript(js, null);
                 });
             }
